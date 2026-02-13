@@ -1,5 +1,27 @@
 export namespace main {
 	
+	export class GlobalSettings {
+	    timeout: number;
+	    useProxy: boolean;
+	    proxyHost: string;
+	    proxyPort: number;
+	    proxyUser: string;
+	    proxyPassword: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GlobalSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timeout = source["timeout"];
+	        this.useProxy = source["useProxy"];
+	        this.proxyHost = source["proxyHost"];
+	        this.proxyPort = source["proxyPort"];
+	        this.proxyUser = source["proxyUser"];
+	        this.proxyPassword = source["proxyPassword"];
+	    }
+	}
 	export class ServerInfo {
 	    id: string;
 	    name: string;

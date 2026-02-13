@@ -6,4 +6,8 @@ export function BatchExecute(arg1:Array<main.ServerInfo>,arg2:string):Promise<vo
 
 export function LoadServers():Promise<Array<main.ServerInfo>>;
 
+export function LoadSettings():Promise<main.GlobalSettings>;
+
 export function SaveServers(arg1:Array<main.ServerInfo>):Promise<void>;
+
+export function SaveSettings(arg1:main.GlobalSettings):Promise<void>;

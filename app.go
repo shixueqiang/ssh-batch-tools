@@ -12,9 +12,23 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/proxy"
 )
 
-const configPath = "servers.json"
+const (
+	configPath   = "servers.json"
+	settingsPath = "settings.json"
+)
+
+// GlobalSettings 全局配置结构体
+type GlobalSettings struct {
+	Timeout       int    `json:"timeout"`
+	UseProxy      bool   `json:"useProxy"`
+	ProxyHost     string `json:"proxyHost"`
+	ProxyPort     int    `json:"proxyPort"`
+	ProxyUser     string `json:"proxyUser"`
+	ProxyPassword string `json:"proxyPassword"`
+}
 
 type ServerInfo struct {
 	Id         string `json:"id"`
@@ -71,6 +85,15 @@ func (a *App) BatchExecute(servers []ServerInfo, command string) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			// 核心救命代码：捕获 Panic，防止整个程序崩溃
+			defer func() {
+				if r := recover(); r != nil {
+					runtime.EventsEmit(a.ctx, "ssh_log", ExecResult{
+						Output: fmt.Sprintf("[Worker %d] 发生了致命内部错误: %v", workerID, r),
+						Error:  "INTERNAL_PANIC",
+					})
+				}
+			}()
 			// 每个 Worker 持续从 jobs 通道中取任务，直到通道关闭
 			for server := range jobs {
 				// 发送初始状态
@@ -114,17 +137,17 @@ func (a *App) BatchExecute(servers []ServerInfo, command string) {
 
 // 私有方法：处理单台服务器的 SSH 连接
 func (a *App) runSingleSSH(server ServerInfo, cmd string) (string, error) {
-	var authMethods []ssh.AuthMethod
+	// 每次执行前加载最新全局设置
+	settings := a.LoadSettings()
 
+	var authMethods []ssh.AuthMethod
 	if server.PrivateKey != "" {
-		// 1. 解析私钥
 		signer, err := ssh.ParsePrivateKey([]byte(server.PrivateKey))
 		if err != nil {
 			return "", fmt.Errorf("解析私钥失败: %v", err)
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
 	} else {
-		// 2. 使用密码
 		authMethods = append(authMethods, ssh.Password(server.Password))
 	}
 
@@ -132,14 +155,47 @@ func (a *App) runSingleSSH(server ServerInfo, cmd string) (string, error) {
 		User:            server.User,
 		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
+		// 使用全局设置中的超时时间
+		Timeout: time.Duration(settings.Timeout) * time.Second,
 	}
 
-	addr := net.JoinHostPort(server.IP, strconv.Itoa(server.Port))
-	client, err := ssh.Dial("tcp", addr, config)
-	if err != nil {
-		return "", err
+	targetAddr := net.JoinHostPort(server.IP, strconv.Itoa(server.Port))
+
+	var conn net.Conn
+	var err error
+
+	// 处理代理逻辑
+	if settings.UseProxy && settings.ProxyHost != "" {
+		proxyAddr := net.JoinHostPort(settings.ProxyHost, strconv.Itoa(settings.ProxyPort))
+		var auth *proxy.Auth
+		if settings.ProxyUser != "" {
+			auth = &proxy.Auth{User: settings.ProxyUser, Password: settings.ProxyPassword}
+		}
+
+		// 创建 SOCKS5 代理拨号器
+		dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
+		if err != nil {
+			return "", fmt.Errorf("无法连接到代理服务器: %v", err)
+		}
+
+		// 通过代理拨号目标服务器
+		conn, err = dialer.Dial("tcp", targetAddr)
+	} else {
+		// 普通 TCP 直接拨号
+		conn, err = net.DialTimeout("tcp", targetAddr, config.Timeout)
 	}
+
+	if err != nil {
+		return "", fmt.Errorf("网络连接失败: %v", err)
+	}
+	defer conn.Close()
+
+	// 在已建立的底层连接（直接连接或代理连接）上初始化 SSH
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, config)
+	if err != nil {
+		return "", fmt.Errorf("SSH 握手失败: %v", err)
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
 	session, err := client.NewSession()
@@ -150,6 +206,27 @@ func (a *App) runSingleSSH(server ServerInfo, cmd string) (string, error) {
 
 	output, err := session.CombinedOutput(cmd)
 	return string(output), err
+}
+
+// LoadSettings 加载配置
+func (a *App) LoadSettings() GlobalSettings {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		// 默认配置
+		return GlobalSettings{Timeout: 5, UseProxy: false}
+	}
+	var s GlobalSettings
+	json.Unmarshal(data, &s)
+	return s
+}
+
+// SaveSettings 保存配置
+func (a *App) SaveSettings(s GlobalSettings) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, data, 0644)
 }
 
 // LoadServers 从本地读取

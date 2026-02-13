@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LoadServers, SaveServers, BatchExecute } from '../wailsjs/go/main/App';
+import { LoadServers, SaveServers, BatchExecute, LoadSettings, SaveSettings } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 function App() {
@@ -12,6 +12,14 @@ function App() {
 
     // --- 新增：搜索状态 ---
     const [searchTerm, setSearchTerm] = useState("");
+    const [settings, setSettings] = useState({
+        timeout: 5,
+        useProxy: false,
+        proxyHost: '127.0.0.1',
+        proxyPort: 1080,
+        proxyUser: '',
+        proxyPassword: ''
+    });
 
     const [formData, setFormData] = useState({
         name: '', ip: '', port: 22, user: 'root', password: '', privateKey: ''
@@ -47,6 +55,7 @@ function App() {
 
     useEffect(() => {
         LoadServers().then(setServers).catch(console.error);
+        LoadSettings().then(setSettings).catch(console.error);
 
         const unregister = EventsOn("ssh_log", (res) => {
             setLogs(prev => [...prev, {
@@ -60,6 +69,13 @@ function App() {
         });
         return () => unregister();
     }, []);
+
+    const handleSaveSettings = () => {
+        SaveSettings(settings).then(() => {
+            alert("全局配置已保存！");
+            setView('list'); // 保存后返回列表
+        }).catch(err => alert("保存失败: " + err));
+    };
 
     const handleAddServer = () => {
         if (!formData.ip || !formData.name) return alert("名称和IP不能为空");
@@ -95,6 +111,7 @@ function App() {
             <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
                 <button onClick={() => setView('list')} style={btnStyle(view === 'list')}>服务器列表</button>
                 <button onClick={() => setView('add')} style={btnStyle(view === 'add')}>+ 添加服务器</button>
+                <button onClick={() => setView('settings')} style={btnStyle(view === 'settings')}>⚙️ 全局设置</button>
                 <button onClick={() => setLogs([])} style={{ ...btnStyle(false), marginLeft: 'auto', backgroundColor: '#e67e22' }}>清空日志</button>
             </div>
 
@@ -215,9 +232,69 @@ function App() {
                     <button onClick={handleAddServer} style={{ ...runBtnStyle, width: '100%', marginLeft: 0, marginTop: '10px' }}>保存到本地</button>
                 </div>
             )}
+
+            {/* ✅ 视图3：全局设置页 */}
+            {view === 'settings' && (
+                <div style={settingsContainerStyle}>
+                    <h3 style={{ borderBottom: '1px solid #444', paddingBottom: '10px' }}>运维全局配置</h3>
+                    
+                    <div style={formGroup}>
+                        <label>SSH 连接超时 (秒):</label>
+                        <input type="number" style={inputStyleFull} value={settings.timeout} 
+                            onChange={e => setSettings({...settings, timeout: parseInt(e.target.value) || 0})} />
+                    </div>
+
+                    <div style={{ ...formGroup, flexDirection: 'row', alignItems: 'center', cursor: 'pointer' }}>
+                        <input id="useProxy" type="checkbox" checked={settings.useProxy} 
+                            onChange={e => setSettings({...settings, useProxy: e.target.checked})} />
+                        <label htmlFor="useProxy" style={{ marginLeft: '10px' }}>启用 SOCKS5 代理 (用于访问海外服务器)</label>
+                    </div>
+
+                    {settings.useProxy && (
+                        <div style={proxyBoxStyle}>
+                            <div style={formGroup}>
+                                <label>代理地址与端口:</label>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input style={{...inputStyleFull, flex: 3}} value={settings.proxyHost} onChange={e => setSettings({...settings, proxyHost: e.target.value})} placeholder="127.0.0.1" />
+                                    <input type="number" style={{...inputStyleFull, flex: 1}} value={settings.proxyPort} onChange={e => setSettings({...settings, proxyPort: parseInt(e.target.value) || 0})} placeholder="1080" />
+                                </div>
+                            </div>
+                            <div style={formGroup}>
+                                <label>认证 (可选):</label>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input style={inputStyleFull} value={settings.proxyUser} onChange={e => setSettings({...settings, proxyUser: e.target.value})} placeholder="用户名" />
+                                    <input type="password" style={inputStyleFull} value={settings.proxyPassword} onChange={e => setSettings({...settings, proxyPassword: e.target.value})} placeholder="密码" />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <button onClick={handleSaveSettings} style={{...runBtnStyle, width: '100%', marginLeft: 0, marginTop: '20px'}}>
+                        💾 保存全局设置
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
+
+// --- 新增样式定义 ---
+const settingsContainerStyle = { 
+    maxWidth: '500px', 
+    margin: '40px auto', 
+    background: '#2c3e50', 
+    padding: '30px', 
+    borderRadius: '12px', 
+    boxShadow: '0 8px 20px rgba(0,0,0,0.4)' 
+};
+
+const proxyBoxStyle = { 
+    background: '#1b2636', 
+    padding: '15px', 
+    borderRadius: '8px', 
+    marginTop: '10px',
+    border: '1px dashed #444' 
+};
 
 // --- 新增/更新的样式定义 ---
 const searchInputStyle = {
